@@ -1,0 +1,1 @@
+Initializing DesignPath AI project. The complete source code will be committed next.
