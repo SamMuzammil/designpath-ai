@@ -34,18 +34,21 @@ const SYSTEM="You are DesignPath AI, a practical product design mentor. The lear
 let messages=[];
 try{const stored=JSON.parse(localStorage.getItem(KEY)||"[]");if(Array.isArray(stored))messages=stored.filter(x=>x && (x.role==="user"||x.role==="assistant") && typeof x.content==="string").slice(-20)}catch{}
 let engine=null,loading=null,busy=false;
+let aiMode="browser",pcConnected=false;
+const OLLAMA_MODEL="qwen2.5:7b-instruct", OLLAMA_URL="http://127.0.0.1:11434";
 const $=s=>document.querySelector(s), output=$("#chat-output"), button=$("#chat-submit"), input=$("#chat-input"), parent=output.parentElement;
 function el(tag,text,css){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(css)n.style.cssText=css;return n}
 function note(text){status.textContent=text;status.title=text;}
 const controls=el("div",undefined,"display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0");
-const load=el("button","⬇ Load local AI","padding:10px 15px;border:0;background:#7356dd;color:#fff;border-radius:9px;cursor:pointer;font-weight:700");
+const load=el("button","⬇ Load browser AI","padding:10px 15px;border:0;background:#7356dd;color:#fff;border-radius:9px;cursor:pointer;font-weight:700");
+const pcButton=el("button","🖥 Use PC model (Ollama)","padding:10px 15px;border:1px solid #7356dd;background:#eeeaff;color:#4c34ab;border-radius:9px;cursor:pointer;font-weight:700");
 const exportButton=el("button","Export progress","padding:10px 12px;border:1px solid #d7d6e5;background:white;color:#4d4b69;border-radius:9px;cursor:pointer");
 const importButton=el("button","Import progress","padding:10px 12px;border:1px solid #d7d6e5;background:white;color:#4d4b69;border-radius:9px;cursor:pointer");
 const clearButton=el("button","Clear chat","padding:10px 12px;border:1px solid #d7d6e5;background:white;color:#4d4b69;border-radius:9px;cursor:pointer");
 const status=el("div","Check GPU compatibility; first load downloads the model.","font-size:12px;color:#68648d;flex:1 1 260px");
-controls.append(load,exportButton,importButton,clearButton,status);
+controls.append(pcButton,load,exportButton,importButton,clearButton,status);
 parent.insertBefore(controls,output);
-const explanation=el("p","AI model: Llama 3.2 1B (local WebGPU). First-time model download may use substantial bandwidth and device memory. Conversations stay in your browser; model files are downloaded from public hosting. This smaller model may be less capable than cloud AI.","font-size:12px;color:#7a7993;line-height:1.6");
+const explanation=el("p","Choose your AI: Ollama runs Qwen2.5 7B on your own Windows PC from S: (recommended after local installation), while browser AI runs Llama 3.2 1B using WebGPU. Both are no-key modes. Chat stays in this browser. On desktop Edge/Chrome, allow local network access if prompted.","font-size:12px;color:#7a7993;line-height:1.6");
 parent.insertBefore(explanation,output);
 const review=el("button","✦ Review my written assignment with local AI","display:block;border:none;border-radius:9px;background:#efe9ff;color:#5944a6;padding:12px 14px;margin:13px 0;font-weight:700;cursor:pointer");
 const assignmentArea=$("#save-msg").parentElement;
@@ -76,8 +79,49 @@ async function initialize(){
   try{return await loading}catch(e){note("AI initialization failed: "+(e.message||String(e)));load.textContent="Retry loading AI";throw e}
   finally{loading=null;load.disabled=false}
 }
-load.onclick=()=>{initialize().catch(e=>{console.error("Local AI failed",e)})};
+async function connectPC(){
+  note("Checking Ollama on this computer…");
+  const ctrl=new AbortController(), timer=setTimeout(()=>ctrl.abort(),8000);
+  try{
+    const r=await fetch(OLLAMA_URL+"/api/tags",{cache:"no-store",signal:ctrl.signal,targetAddressSpace:"loopback"});
+    if(!r.ok)throw Error("Ollama returned HTTP "+r.status);
+    const data=await r.json();
+    if(!Array.isArray(data.models))throw Error("Unexpected Ollama response");
+    const found=data.models.some(x=>x.name===OLLAMA_MODEL || x.model===OLLAMA_MODEL);
+    if(!found)throw Error("Ollama is running, but "+OLLAMA_MODEL+" is not installed. Run ollama pull "+OLLAMA_MODEL);
+    aiMode="ollama";pcConnected=true;
+    pcButton.textContent="✓ PC model connected";load.textContent=engine?"Use browser AI":"Load browser AI instead";
+    note("✓ Ollama connected on this PC · "+OLLAMA_MODEL+". No API key.");
+    return true;
+  }catch(err){
+    pcConnected=false;aiMode="browser";pcButton.textContent="🖥 Retry PC connection";
+    const reason=(err.name==="AbortError")?"connection timed out":(err.message||String(err));
+    note("Cannot connect to Ollama: "+reason+". Confirm it is running, then allow Local Network Access if asked.");
+    return false;
+  }finally{clearTimeout(timer)}
+}
+pcButton.onclick=()=>{connectPC()};
+load.onclick=()=>{aiMode="browser";pcConnected=false;pcButton.textContent="🖥 Use PC model (Ollama)";initialize().catch(e=>{console.error("Local AI failed",e)})};
 async function ask(prompt,reviewMode=false){
+  if(aiMode==="ollama" && pcConnected){
+    const history=reviewMode?[
+      {role:"system",content:SYSTEM+" For assignments, assess only written text. Grade problem understanding /20 and design reasoning /15, never unseen Figma or usability."},
+      {role:"user",content:prompt.slice(0,5000)}
+    ]:[{role:"system",content:SYSTEM},...messages.slice(-8).map(x=>({role:x.role,content:x.content.slice(0,2000)}))];
+    const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),120000);
+    try{
+      const r=await fetch(OLLAMA_URL+"/api/chat",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:OLLAMA_MODEL,messages:history,stream:false,keep_alive:"15m",options:{temperature:0.55,num_predict:500,num_ctx:4096}}),
+        signal:ctrl.signal,targetAddressSpace:"loopback"
+      });
+      if(!r.ok)throw Error("Ollama HTTP "+r.status);
+      const data=await r.json(),reply=data.message?.content?.trim();
+      if(!reply)throw Error("No response from Ollama");
+      return reply;
+    }catch(err){throw Error("PC Ollama: "+(err.name==="AbortError"?"request timed out":err.message))}
+    finally{clearTimeout(timer)}
+  }
   const client=await initialize();
   const context=reviewMode?[
     {role:"system",content:SYSTEM+" For assignments, assess only the supplied written text. Give separate feedback on problem understanding (20) and design reasoning (15), describe improvements. Never grade usability, user flow, visual execution, or an unseen prototype."},
