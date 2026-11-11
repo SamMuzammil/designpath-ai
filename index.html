@@ -35,7 +35,8 @@ let messages=[];
 try{const stored=JSON.parse(localStorage.getItem(KEY)||"[]");if(Array.isArray(stored))messages=stored.filter(x=>x && (x.role==="user"||x.role==="assistant") && typeof x.content==="string").slice(-20)}catch{}
 let engine=null,loading=null,busy=false;
 let aiMode="browser",pcConnected=false;
-const OLLAMA_MODEL="qwen2.5:7b-instruct", OLLAMA_URL="http://127.0.0.1:11434";
+const OLLAMA_MODEL="qwen3:14b", OLLAMA_URL="http://127.0.0.1:11434";
+let deepThinking=localStorage.getItem("designpath-deep-thinking")==="yes";
 const $=s=>document.querySelector(s), output=$("#chat-output"), button=$("#chat-submit"), input=$("#chat-input"), parent=output.parentElement;
 function el(tag,text,css){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(css)n.style.cssText=css;return n}
 function note(text){status.textContent=text;status.title=text;}
@@ -46,9 +47,13 @@ const exportButton=el("button","Export progress","padding:10px 12px;border:1px s
 const importButton=el("button","Import progress","padding:10px 12px;border:1px solid #d7d6e5;background:white;color:#4d4b69;border-radius:9px;cursor:pointer");
 const clearButton=el("button","Clear chat","padding:10px 12px;border:1px solid #d7d6e5;background:white;color:#4d4b69;border-radius:9px;cursor:pointer");
 const status=el("div","Check GPU compatibility; first load downloads the model.","font-size:12px;color:#68648d;flex:1 1 260px");
-controls.append(pcButton,load,exportButton,importButton,clearButton,status);
+const thinkingLabel=el("label",undefined,"display:inline-flex;gap:7px;align-items:center;padding:8px 11px;border:1px solid #d8d1f4;border-radius:9px;font-weight:600;font-size:12px;color:#56459c;cursor:pointer");
+const thinkingToggle=el("input");thinkingToggle.type="checkbox";thinkingToggle.checked=deepThinking;thinkingToggle.setAttribute("aria-label","Deep Thinking (slower)");
+thinkingLabel.append(thinkingToggle,document.createTextNode("Deep Thinking (slower)"));
+thinkingToggle.onchange=()=>{deepThinking=thinkingToggle.checked;localStorage.setItem("designpath-deep-thinking",deepThinking?"yes":"no");note("Qwen3 14B: "+(deepThinking?"Deep Thinking on — slower, for complex tasks":"Fast mode on — Thinking off"));};
+controls.append(pcButton,thinkingLabel,load,exportButton,importButton,clearButton,status);
 parent.insertBefore(controls,output);
-const explanation=el("p","Choose your AI: Ollama runs Qwen2.5 7B on your own Windows PC from S: (recommended after local installation), while browser AI runs Llama 3.2 1B using WebGPU. Both are no-key modes. Chat stays in this browser. On desktop Edge/Chrome, allow local network access if prompted.","font-size:12px;color:#7a7993;line-height:1.6");
+const explanation=el("p","Choose your AI: Ollama runs Qwen3 14B on your Windows PC from S: (recommended after local installation), while browser AI runs Llama 3.2 1B using WebGPU. Both are no-key modes. Chat stays in this browser. On desktop Edge/Chrome, allow local network access if prompted.","font-size:12px;color:#7a7993;line-height:1.6");
 parent.insertBefore(explanation,output);
 const review=el("button","✦ Review my written assignment with local AI","display:block;border:none;border-radius:9px;background:#efe9ff;color:#5944a6;padding:12px 14px;margin:13px 0;font-weight:700;cursor:pointer");
 const assignmentArea=$("#save-msg").parentElement;
@@ -91,12 +96,12 @@ async function connectPC(){
     if(!found)throw Error("Ollama is running, but "+OLLAMA_MODEL+" is not installed. Run ollama pull "+OLLAMA_MODEL);
     aiMode="ollama";pcConnected=true;
     pcButton.textContent="✓ PC model connected";load.textContent=engine?"Use browser AI":"Load browser AI instead";
-    note("✓ Ollama connected on this PC · "+OLLAMA_MODEL+". No API key.");
+    note("✓ Ollama connected · "+OLLAMA_MODEL+" · "+(deepThinking?"Deep Thinking ON":"Fast mode (Thinking OFF)")+". No API key.");
     return true;
   }catch(err){
     pcConnected=false;aiMode="browser";pcButton.textContent="🖥 Retry PC connection";
     const reason=(err.name==="AbortError")?"connection timed out":(err.message||String(err));
-    note("Cannot connect to Ollama: "+reason+". Confirm it is running, then allow Local Network Access if asked.");
+    note("Cannot connect to Ollama: "+reason+". Make sure Ollama is running, allow Local Network Access, and permit this website's origin in OLLAMA_ORIGINS.");
     return false;
   }finally{clearTimeout(timer)}
 }
@@ -112,7 +117,7 @@ async function ask(prompt,reviewMode=false){
     try{
       const r=await fetch(OLLAMA_URL+"/api/chat",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:OLLAMA_MODEL,messages:history,stream:false,keep_alive:"15m",options:{temperature:0.55,num_predict:500,num_ctx:4096}}),
+        body:JSON.stringify({model:OLLAMA_MODEL,messages:history,think:deepThinking,stream:false,keep_alive:"15m",options:{temperature:0.55,num_predict:deepThinking?1100:500,num_ctx:4096}}),
         signal:ctrl.signal,targetAddressSpace:"loopback"
       });
       if(!r.ok)throw Error("Ollama HTTP "+r.status);
