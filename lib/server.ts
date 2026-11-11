@@ -5,7 +5,7 @@ export async function serverClient(){
   if(!isConfigured()) throw new Error('Supabase configuration required');
   const store=await cookies();
   return createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,{
-    cookies:{getAll(){return store.getAll()},setAll(items){for(const item of items){try{store.set(item.name,item.value,item.options)}catch{/* rendering context */}}}}
+    cookies:{getAll(){return store.getAll()},setAll(items: { name: string; value: string; options?: Parameters<typeof store.set>[2] }[]){for(const item of items){try{store.set(item.name,item.value,item.options)}catch{/* rendering context */}}}}
   });
 }
 export async function owner(){
